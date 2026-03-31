@@ -41,6 +41,7 @@ The malicious axios versions were live for roughly 2–3 hours before being remo
 
 - **Node.js / npm** must be installed to check npm packages and cache
 - **Python / pip** (optional) — only needed for the LiteLLM check
+- **Internet access** (optional but recommended) — both scripts fetch the latest IOC list from GitHub on startup; `ioc.json` is used as a fallback when offline
 - No third-party tools or elevated privileges required for most checks
 - The Windows script benefits from running as **Administrator** for full access to scheduled tasks, firewall logs, and `HKLM` registry keys
 
@@ -57,21 +58,27 @@ chmod +x check-axios-rat.sh
 
 Run from your project directory to also check local `node_modules` and lock files.
 
+The script fetches the latest IOC data from GitHub on startup. If offline, it falls back to `ioc.json` in the same directory.
+
 ### Windows (PowerShell)
 
-Ensure `check-axios-rat.ps1` and `ioc.json` are in the same directory, then:
+Open a PowerShell terminal, `cd` to the folder containing the scripts, then run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
+powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
 ```
 
 For full results (scheduled tasks, firewall logs, `HKLM` registry keys), run from an **elevated (Administrator) PowerShell** prompt:
 
+1. Open **PowerShell as Administrator** (right-click → *Run as administrator*)
+2. `cd` to the folder containing the scripts
+3. Run:
+
 ```powershell
-Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PWD\check-axios-rat.ps1`""
+powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
 ```
 
-> **Note:** The full path (`$PWD\...`) is required because the elevated process starts in a different working directory (`System32`) and cannot resolve a relative filename.
+> **Note:** Using `Start-Process powershell -Verb RunAs` to self-elevate causes the new window to open in `C:\Windows\System32` and close immediately on exit — run from an already-elevated terminal instead.
 
 ---
 
@@ -157,22 +164,16 @@ You appear to be clean, but it is still worth taking precautions:
 
 ## Windows Defender False Positive
 
-Windows Defender performs **static file scanning** and flags `check-axios-rat.ps1` because previous versions contained known malware artifact names (`wt.exe`, `plain-crypto-js`, `sfrclak.com`) in the same file as system API calls (`Get-DnsClientCache`, `Get-NetTCPConnection`, registry reads). That combination matches heuristic signatures for RAT droppers, even though the script only performs read-only forensic checks.
+Windows Defender performs **static file scanning** and may flag `check-axios-rat.ps1` because it contains system API calls (`Get-DnsClientCache`, `Get-NetTCPConnection`, registry reads) that match heuristic signatures for RAT droppers, even though the script only performs read-only forensic checks.
 
-**The current version is split into two files to avoid this:**
+**IOC values are kept out of the script to reduce this risk:**
 
 | File | Contents | AV risk |
 |------|----------|---------|
-| `check-axios-rat.ps1` | All PowerShell logic — no IOC strings | None |
-| `ioc.json` | IOC values (domain, filenames, versions) — no code | None |
+| `check-axios-rat.ps1` | All PowerShell logic — fetches IOC data from GitHub at runtime | Low |
+| `ioc.json` | IOC values (domain, filenames, versions) — no code, used as offline fallback | None |
 
-The script loads `ioc.json` at runtime from the same directory. Neither file alone contains both the suspicious strings and the suspicious API calls, so neither triggers the static signature.
-
-**Both files must be in the same directory when running:**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
-```
+Neither file alone contains both the suspicious strings and the suspicious API calls, so neither should trigger the static signature.
 
 **To confirm a Defender flag is against the script (not a real infection):**
 
@@ -187,13 +188,13 @@ Test-Path "$env:PROGRAMDATA\wt.exe"
 Get-DnsClientCache | Where-Object { $_.Entry -like "*sfrclak*" }
 ```
 
-**If Defender still blocks the updated script**, add a folder-level exclusion (requires Administrator):
+**If Defender still blocks the script**, add a folder-level exclusion (requires Administrator):
 
 ```powershell
-# Replace with the actual folder path
-Add-MpPreference -ExclusionPath "D:\Github\axios-scanner"
-powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
-Remove-MpPreference -ExclusionPath "D:\Github\axios-scanner"
+# Replace with the actual path to the axios-scanner folder
+Add-MpPreference -ExclusionPath "C:\path\to\axios-scanner"
+powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
+Remove-MpPreference -ExclusionPath "C:\path\to\axios-scanner"
 ```
 
 ---
