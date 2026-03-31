@@ -102,6 +102,14 @@ ACT_MOND="$(parse_ioc "$IOC_JSON" "act_mond")"
 
 mapfile -t AX_BAD < <(parse_ioc_array "$IOC_JSON" "ax_bad")
 
+# Detect pip once; reused in cache scan and LiteLLM check
+PIP_BIN=""
+if command -v pip3 &>/dev/null; then
+  PIP_BIN=$(command -v pip3)
+elif command -v pip &>/dev/null; then
+  PIP_BIN=$(command -v pip)
+fi
+
 # ── 1. Malicious files on disk ───────────────────────────────
 echo ""
 echo -e "${BLD}1. Checking for malicious files on disk...${RST}"
@@ -198,23 +206,71 @@ if [[ -f "package.json" && -d "./node_modules" ]]; then
   fi
 fi
 
-# ── 3. npm cache scan ───────────────────────────────────────
+# ── 3. Package manager cache scans ──────────────────────────
 echo ""
-echo -e "${BLD}3. Scanning npm cache for malicious tarballs...${RST}"
+echo -e "${BLD}3. Scanning package manager caches (npm, yarn, pnpm, pip)...${RST}"
 
+# npm
 NPM_CACHE="$(npm config get cache 2>/dev/null)"
 if [[ -d "$NPM_CACHE" ]]; then
+  info "npm cache: $NPM_CACHE"
   for bad_ver in "${AX_BAD[@]}"; do
     if find "$NPM_CACHE" -name "axios-${bad_ver}*" 2>/dev/null | grep -q .; then
-      warn "Found cached tarball matching 'axios-${bad_ver}' in $NPM_CACHE — package was downloaded"
+      warn "npm cache contains 'axios-${bad_ver}' — package was downloaded"
     fi
   done
   if find "$NPM_CACHE" -name "${PCJS_PKG}*" 2>/dev/null | grep -q .; then
-    warn "Found cached tarball matching '$PCJS_PKG' in $NPM_CACHE — package was downloaded"
+    warn "npm cache contains '$PCJS_PKG' — package was downloaded"
   fi
   ok "npm cache scan complete"
 else
   warn "npm cache path '$NPM_CACHE' does not exist or is not a directory"
+fi
+
+# yarn (classic v1 and berry v2/v3)
+if command -v yarn &>/dev/null; then
+  YARN_CACHE="$(yarn cache dir 2>/dev/null)"
+  if [[ -d "$YARN_CACHE" ]]; then
+    info "yarn cache: $YARN_CACHE"
+    for bad_ver in "${AX_BAD[@]}"; do
+      if find "$YARN_CACHE" -name "*axios*${bad_ver}*" 2>/dev/null | grep -q .; then
+        warn "yarn cache contains 'axios-${bad_ver}' — package was downloaded"
+      fi
+    done
+    if find "$YARN_CACHE" -name "${PCJS_PKG}*" 2>/dev/null | grep -q .; then
+      warn "yarn cache contains '$PCJS_PKG' — package was downloaded"
+    fi
+    ok "yarn cache scan complete"
+  fi
+fi
+
+# pnpm
+if command -v pnpm &>/dev/null; then
+  PNPM_STORE="$(pnpm store path 2>/dev/null)"
+  if [[ -d "$PNPM_STORE" ]]; then
+    info "pnpm store: $PNPM_STORE"
+    for bad_ver in "${AX_BAD[@]}"; do
+      if find "$PNPM_STORE" -name "*axios*${bad_ver}*" 2>/dev/null | grep -q .; then
+        warn "pnpm store contains 'axios@${bad_ver}' — package was downloaded"
+      fi
+    done
+    if find "$PNPM_STORE" -name "${PCJS_PKG}*" 2>/dev/null | grep -q .; then
+      warn "pnpm store contains '$PCJS_PKG' — package was downloaded"
+    fi
+    ok "pnpm store scan complete"
+  fi
+fi
+
+# pip
+if [[ -n "$PIP_BIN" ]]; then
+  PIP_CACHE_DIR="$("$PIP_BIN" cache dir 2>/dev/null)"
+  if [[ -d "$PIP_CACHE_DIR" ]]; then
+    info "pip cache: $PIP_CACHE_DIR"
+    if find "$PIP_CACHE_DIR" -name "litellm*" 2>/dev/null | grep -q .; then
+      warn "pip cache contains litellm package(s) — review for compromised version"
+    fi
+    ok "pip cache scan complete"
+  fi
 fi
 
 # ── 4. Active C2 connections ─────────────────────────────────
@@ -261,13 +317,6 @@ fi
 echo ""
 echo -e "${BLD}6. Checking LiteLLM (Python) installation...${RST}"
 info "LiteLLM was also compromised via Trivy/TeamPCP attack"
-
-PIP_BIN=""
-if command -v pip3 &>/dev/null; then
-  PIP_BIN=$(command -v pip3)
-elif command -v pip &>/dev/null; then
-  PIP_BIN=$(command -v pip)
-fi
 
 if [[ -n "$PIP_BIN" ]]; then
   LITELLM_VER=$("$PIP_BIN" show litellm 2>/dev/null | grep "^Version:" | awk '{print $2}')

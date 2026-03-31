@@ -165,26 +165,69 @@ if (Test-Path "package.json") {
     }
 }
 
-# ── 3. npm cache scan ───────────────────────────────────────
+# ── 3. Package manager cache scans ──────────────────────────
 
 Write-Host ""
-Write-Host "3. Scanning npm cache for malicious tarballs..." -ForegroundColor White
+Write-Host "3. Scanning package manager caches (npm, yarn, pnpm, pip)..." -ForegroundColor White
 
+# npm
 try {
     $npmCache = (npm config get cache 2>$null).Trim()
     if ($npmCache -and (Test-Path $npmCache)) {
+        Info "npm cache: $npmCache"
         $cachePatterns = @()
         if ($pcjsPkg) { $cachePatterns += "$pcjsPkg*" }
-        foreach ($badVer in $axBadVers) {
-            $cachePatterns += "axios-$badVer*"
-        }
+        foreach ($badVer in $axBadVers) { $cachePatterns += "axios-$badVer*" }
         foreach ($pattern in $cachePatterns) {
             $hits = Get-ChildItem -Path $npmCache -Recurse -Filter $pattern -ErrorAction SilentlyContinue
-            if ($hits) {
-                Warn "npm cache contains '$pattern' — package was downloaded at some point"
-            }
+            if ($hits) { Warn "npm cache contains '$pattern' — package was downloaded at some point" }
         }
         Ok "npm cache scan complete"
+    }
+} catch {}
+
+# yarn (classic v1 and berry v2/v3)
+try {
+    $yarnCache = (yarn cache dir 2>$null).Trim()
+    if ($yarnCache -and (Test-Path $yarnCache)) {
+        Info "yarn cache: $yarnCache"
+        foreach ($badVer in $axBadVers) {
+            $hits = Get-ChildItem -Path $yarnCache -Recurse -Filter "*axios*$badVer*" -ErrorAction SilentlyContinue
+            if ($hits) { Warn "yarn cache contains 'axios-$badVer' — package was downloaded" }
+        }
+        if ($pcjsPkg) {
+            $hits = Get-ChildItem -Path $yarnCache -Recurse -Filter "$pcjsPkg*" -ErrorAction SilentlyContinue
+            if ($hits) { Warn "yarn cache contains '$pcjsPkg' — package was downloaded" }
+        }
+        Ok "yarn cache scan complete"
+    }
+} catch {}
+
+# pnpm
+try {
+    $pnpmStore = (pnpm store path 2>$null).Trim()
+    if ($pnpmStore -and (Test-Path $pnpmStore)) {
+        Info "pnpm store: $pnpmStore"
+        foreach ($badVer in $axBadVers) {
+            $hits = Get-ChildItem -Path $pnpmStore -Recurse -Filter "*axios*$badVer*" -ErrorAction SilentlyContinue
+            if ($hits) { Warn "pnpm store contains 'axios@$badVer' — package was downloaded" }
+        }
+        if ($pcjsPkg) {
+            $hits = Get-ChildItem -Path $pnpmStore -Recurse -Filter "$pcjsPkg*" -ErrorAction SilentlyContinue
+            if ($hits) { Warn "pnpm store contains '$pcjsPkg' — package was downloaded" }
+        }
+        Ok "pnpm store scan complete"
+    }
+} catch {}
+
+# pip
+try {
+    $pipCacheDir = (pip cache dir 2>$null).Trim()
+    if ($pipCacheDir -and (Test-Path $pipCacheDir)) {
+        Info "pip cache: $pipCacheDir"
+        $hits = Get-ChildItem -Path $pipCacheDir -Recurse -Filter "litellm*" -ErrorAction SilentlyContinue
+        if ($hits) { Warn "pip cache contains litellm package(s) — review for compromised version" }
+        Ok "pip cache scan complete"
     }
 } catch {}
 

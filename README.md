@@ -27,7 +27,7 @@ The malicious axios versions were live for roughly 2–3 hours before being remo
 | 2 | Malicious axios version in local `node_modules` | ✓ | ✓ | ✓ |
 | 3 | Malicious axios version in global `node_modules` | ✓ | ✓ | ✓ |
 | 4 | `plain-crypto-js` presence (any version) | ✓ | ✓ | ✓ |
-| 5 | npm cache contains bad tarballs | ✓ | ✓ | ✓ |
+| 5 | npm / yarn / pnpm / pip cache contains bad tarballs | ✓ | ✓ | ✓ |
 | 6 | Active TCP connection to C2 (port 8000) | ✓ | ✓ | ✓ |
 | 7 | DNS cache resolved `sfrclak.com` | ✓ | – | – |
 | 8 | Suspicious processes running | ✓ | ✓ | ✓ |
