@@ -1,0 +1,9 @@
+{
+  "c2_domain":   "sfrclak.com",
+  "c2_port":     8000,
+  "wt_bin":      "wt.exe",
+  "pcjs_pkg":    "plain-crypto-js",
+  "ld_py":       "ld.py",
+  "act_mond":    "act.mond",
+  "ax_bad":      ["1.14.1", "0.30.4"]
+}

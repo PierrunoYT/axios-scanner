@@ -59,15 +59,19 @@ Run from your project directory to also check local `node_modules` and lock file
 
 ### Windows (PowerShell)
 
+Ensure `check-axios-rat.ps1` and `ioc.json` are in the same directory, then:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
 ```
 
-For full results, run from an **elevated (Administrator) PowerShell** prompt:
+For full results (scheduled tasks, firewall logs, `HKLM` registry keys), run from an **elevated (Administrator) PowerShell** prompt:
 
 ```powershell
-Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File check-axios-rat.ps1"
+Start-Process powershell -Verb RunAs -ArgumentList "-ExecutionPolicy Bypass -File `"$PWD\check-axios-rat.ps1`""
 ```
+
+> **Note:** The full path (`$PWD\...`) is required because the elevated process starts in a different working directory (`System32`) and cannot resolve a relative filename.
 
 ---
 
@@ -153,17 +157,27 @@ You appear to be clean, but it is still worth taking precautions:
 
 ## Windows Defender False Positive
 
-Windows Defender (and some other heuristic AV engines) may flag `check-axios-rat.ps1` itself because the script:
+Windows Defender performs **static file scanning** and flags `check-axios-rat.ps1` because previous versions contained known malware artifact names (`wt.exe`, `plain-crypto-js`, `sfrclak.com`) in the same file as system API calls (`Get-DnsClientCache`, `Get-NetTCPConnection`, registry reads). That combination matches heuristic signatures for RAT droppers, even though the script only performs read-only forensic checks.
 
-- References known malware artifact names (`wt.exe`, `plain-crypto-js`, `sfrclak.com`)
-- Queries the DNS client cache, active TCP connections, registry Run keys, and scheduled tasks in a single file
+**The current version is split into two files to avoid this:**
 
-This is a **false positive** — the script performs read-only forensic checks and does not download, execute, or modify anything.
+| File | Contents | AV risk |
+|------|----------|---------|
+| `check-axios-rat.ps1` | All PowerShell logic — no IOC strings | None |
+| `ioc.json` | IOC values (domain, filenames, versions) — no code | None |
 
-**To confirm the flag is against the script and not a real infection:**
+The script loads `ioc.json` at runtime from the same directory. Neither file alone contains both the suspicious strings and the suspicious API calls, so neither triggers the static signature.
+
+**Both files must be in the same directory when running:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
+```
+
+**To confirm a Defender flag is against the script (not a real infection):**
 
 1. Open **Windows Security → Virus & threat protection → Protection history** — the blocked item path should point to `check-axios-rat.ps1`
-2. Run the two manual checks below (individually they do not trigger the heuristic):
+2. Run these checks manually (safe to run individually):
 
 ```powershell
 # Should return False
@@ -173,12 +187,13 @@ Test-Path "$env:PROGRAMDATA\wt.exe"
 Get-DnsClientCache | Where-Object { $_.Entry -like "*sfrclak*" }
 ```
 
-**To run the full script without triggering Defender** (run as Administrator):
+**If Defender still blocks the updated script**, add a folder-level exclusion (requires Administrator):
 
 ```powershell
-Add-MpPreference -ExclusionPath "C:\path\to\check-axios-rat.ps1"
+# Replace with the actual folder path
+Add-MpPreference -ExclusionPath "D:\Github\axios-scanner"
 powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
-Remove-MpPreference -ExclusionPath "C:\path\to\check-axios-rat.ps1"
+Remove-MpPreference -ExclusionPath "D:\Github\axios-scanner"
 ```
 
 ---

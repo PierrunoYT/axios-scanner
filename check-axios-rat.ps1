@@ -1,10 +1,9 @@
 # ============================================================
 #  check-axios-rat.ps1
 #  Checks for indicators of compromise from the axios/LiteLLM
-#  supply chain attack (March 31, 2026)
-#  Affected packages: axios@1.14.1, axios@0.30.4,
-#                     plain-crypto-js@4.2.1
-#  C2 server: sfrclak[.]com:8000
+#  supply chain attack (March 31, 2026).
+#
+#  IOC values are loaded from ioc.json in the same directory.
 #
 #  Run with:  powershell -ExecutionPolicy Bypass -File check-axios-rat.ps1
 # ============================================================
@@ -13,14 +12,21 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $FOUND = $false
 
-# IOC values assembled at runtime to avoid static-string AV signatures
-$ioc_c2_domain   = "sfrcla" + "k.com"
-$ioc_wt_bin      = "wt" + ".exe"
-$ioc_pcjs        = "plain-crypto" + "-js"
-$ioc_ldpy        = "ld" + ".py"
-$ioc_actmond     = "act" + ".mond"
-$ioc_ax_bad1     = "1.14" + ".1"
-$ioc_ax_bad2     = "0.30" + ".4"
+# ── Load IOC data ────────────────────────────────────────────
+$iocFile = Join-Path $PSScriptRoot "ioc.json"
+if (-not (Test-Path $iocFile)) {
+    Write-Host "[ERROR] ioc.json not found next to script. Cannot continue." -ForegroundColor Red
+    exit 1
+}
+$ioc = Get-Content $iocFile -Raw | ConvertFrom-Json
+
+$c2Domain  = $ioc.c2_domain
+$c2Port    = [int]$ioc.c2_port
+$wtBin     = $ioc.wt_bin
+$pcjsPkg   = $ioc.pcjs_pkg
+$ldPy      = $ioc.ld_py
+$actMond   = $ioc.act_mond
+$axBadVers = $ioc.ax_bad
 
 function Banner {
     Write-Host ""
@@ -54,16 +60,14 @@ Banner
 
 Write-Host "1. Checking for malicious files on disk..." -ForegroundColor White
 
-# Windows payload: renamed PowerShell interpreter in ProgramData
-$WtExe = Join-Path $env:PROGRAMDATA $ioc_wt_bin
+$WtExe = Join-Path $env:PROGRAMDATA $wtBin
 Info "Windows RAT payload: $WtExe"
 if (Test-Path $WtExe) {
-    Flag "Found malicious $ioc_wt_bin at $WtExe"
+    Flag "Found malicious $wtBin at $WtExe"
 } else {
-    Ok "$ioc_wt_bin not found in ProgramData"
+    Ok "$wtBin not found in ProgramData"
 }
 
-# VBScript dropper location (common temp locations)
 $VbsLocations = @(
     (Join-Path $env:TEMP "*.vbs"),
     (Join-Path $env:PROGRAMDATA "*.vbs"),
@@ -86,11 +90,11 @@ function Check-NpmPkg($dir, $pkg, $badVer) {
     if (Test-Path $pkgJson) {
         try {
             $meta = Get-Content $pkgJson -Raw | ConvertFrom-Json
-            $ver = $meta.version
+            $ver  = $meta.version
             if ($badVer -and $ver -eq $badVer) {
                 Flag "Found $pkg@$ver in $dir"
             } elseif (-not $badVer -and $ver) {
-                Flag "Found $pkg@$ver in $dir (any version of $ioc_pcjs is suspicious)"
+                Flag "Found $pkg@$ver in $dir (any version of $pcjsPkg is suspicious)"
             } elseif ($ver) {
                 Ok "$pkg@$ver in $dir (not a known bad version)"
             }
@@ -98,35 +102,34 @@ function Check-NpmPkg($dir, $pkg, $badVer) {
     }
 }
 
-# Global npm packages
 try {
-    $globalRoot = (npm root -g 2>$null).Trim()
+    $globalRoot   = (npm root -g 2>$null).Trim()
     $globalPrefix = Split-Path $globalRoot -Parent
     if ($globalPrefix) {
         Info "Global node_modules: $globalRoot"
-        Check-NpmPkg $globalPrefix "axios" $ioc_ax_bad1
-        Check-NpmPkg $globalPrefix "axios" $ioc_ax_bad2
-        Check-NpmPkg $globalPrefix $ioc_pcjs $null
+        foreach ($badVer in $axBadVers) {
+            Check-NpmPkg $globalPrefix "axios" $badVer
+        }
+        Check-NpmPkg $globalPrefix $pcjsPkg $null
     }
 } catch {}
 
-# Local directory
 if (Test-Path "package.json") {
     Info "Local node_modules: $(Get-Location)\node_modules"
     $localAxios = ".\node_modules\axios\package.json"
     if (Test-Path $localAxios) {
         $meta = Get-Content $localAxios -Raw | ConvertFrom-Json
-        if ($meta.version -eq $ioc_ax_bad1 -or $meta.version -eq $ioc_ax_bad2) {
+        if ($axBadVers -contains $meta.version) {
             Flag "Local axios@$($meta.version) is MALICIOUS"
         } else {
             Ok "Local axios@$($meta.version) is not a known bad version"
         }
     }
 
-    $localPcjs = ".\node_modules\$ioc_pcjs\package.json"
+    $localPcjs = ".\node_modules\$pcjsPkg\package.json"
     if (Test-Path $localPcjs) {
         $meta = Get-Content $localPcjs -Raw | ConvertFrom-Json
-        Flag "Found $ioc_pcjs@$($meta.version) in local node_modules"
+        Flag "Found $pcjsPkg@$($meta.version) in local node_modules"
     }
 }
 
@@ -138,11 +141,10 @@ Write-Host "3. Scanning npm cache for malicious tarballs..." -ForegroundColor Wh
 try {
     $npmCache = (npm config get cache 2>$null).Trim()
     if ($npmCache -and (Test-Path $npmCache)) {
-        $cachePatterns = @(
-            "axios-$ioc_ax_bad1*",
-            "axios-$ioc_ax_bad2*",
-            "$ioc_pcjs*"
-        )
+        $cachePatterns = @("$pcjsPkg*")
+        foreach ($badVer in $axBadVers) {
+            $cachePatterns += "axios-$badVer*"
+        }
         foreach ($pattern in $cachePatterns) {
             $hits = Get-ChildItem -Path $npmCache -Recurse -Filter $pattern -ErrorAction SilentlyContinue
             if ($hits) {
@@ -156,33 +158,29 @@ try {
 # ── 4. Network: active C2 connections ───────────────────────
 
 Write-Host ""
-Write-Host "4. Checking for active C2 connections ($($ioc_c2_domain):8000)..." -ForegroundColor White
+Write-Host "4. Checking for active C2 connections ($($c2Domain):$c2Port)..." -ForegroundColor White
 
-$C2Port = 8000
-
-$activeConns = Get-NetTCPConnection -RemotePort $C2Port -ErrorAction SilentlyContinue
+$activeConns = Get-NetTCPConnection -RemotePort $c2Port -ErrorAction SilentlyContinue
 if ($activeConns) {
-    Flag "Active TCP connection to port $C2Port detected!"
+    Flag "Active TCP connection to port $c2Port detected!"
     $activeConns | Format-Table LocalAddress, LocalPort, RemoteAddress, RemotePort, State -AutoSize
 } else {
-    Ok "No active connections to port $C2Port"
+    Ok "No active connections to port $c2Port"
 }
 
-# DNS cache check
-$dnsCache = Get-DnsClientCache -ErrorAction SilentlyContinue | Where-Object { $_.Entry -like "*$ioc_c2_domain*" }
+$dnsCache = Get-DnsClientCache -ErrorAction SilentlyContinue | Where-Object { $_.Entry -like "*$c2Domain*" }
 if ($dnsCache) {
-    Flag "DNS cache contains $ioc_c2_domain — this machine may have contacted the C2 server"
+    Flag "DNS cache contains $c2Domain — this machine may have contacted the C2 server"
 } else {
-    Ok "$ioc_c2_domain not found in DNS cache"
+    Ok "$c2Domain not found in DNS cache"
 }
 
-# Windows Firewall / event log hint
 $c2Events = Get-WinEvent -FilterHashtable @{
     LogName   = "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall"
     StartTime = (Get-Date).AddDays(-2)
-} -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*$ioc_c2_domain*" }
+} -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*$c2Domain*" }
 if ($c2Events) {
-    Flag "Firewall logs reference $ioc_c2_domain"
+    Flag "Firewall logs reference $c2Domain"
 }
 
 # ── 5. Suspicious processes ─────────────────────────────────
@@ -190,21 +188,21 @@ if ($c2Events) {
 Write-Host ""
 Write-Host "5. Checking for suspicious processes..." -ForegroundColor White
 
-$suspiciousProcs = @($ioc_ldpy, $ioc_actmond, "plain-crypto", "setup.js")
-foreach ($proc in $suspiciousProcs) {
-    $hit = Get-Process | Where-Object { $_.MainModule.FileName -like "*$proc*" -or $_.Name -like "*$proc*" } -ErrorAction SilentlyContinue
+foreach ($proc in @($ldPy, $actMond, $pcjsPkg, "setup.js")) {
+    $hit = Get-Process | Where-Object {
+        $_.MainModule.FileName -like "*$proc*" -or $_.Name -like "*$proc*"
+    } -ErrorAction SilentlyContinue
     if ($hit) {
         Flag "Suspicious process running: $proc (PID $($hit.Id))"
     }
 }
 
-# Check for malicious renamed interpreter running from ProgramData
-$wtProcName = $ioc_wt_bin -replace '\.exe$', ''
+$wtProcName = [System.IO.Path]::GetFileNameWithoutExtension($wtBin)
 $wtProc = Get-Process -Name $wtProcName -ErrorAction SilentlyContinue
 if ($wtProc) {
     $wtPath = $wtProc.MainModule.FileName
     if ($wtPath -like "*ProgramData*") {
-        Flag "$ioc_wt_bin running from ProgramData — this matches the RAT payload path ($wtPath)"
+        Flag "$wtBin running from ProgramData — this matches the RAT payload path ($wtPath)"
     }
 }
 Ok "No known malicious processes found"
@@ -214,9 +212,13 @@ Ok "No known malicious processes found"
 Write-Host ""
 Write-Host "6. Checking for persistence mechanisms..." -ForegroundColor White
 
-$taskPattern = "$ioc_wt_bin|$ioc_ldpy|$ioc_pcjs|$ioc_c2_domain|$ioc_actmond" -replace '\.','\.'
 $suspiciousTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-    ($_.TaskPath + $_.TaskName) -match $taskPattern
+    $fullName = $_.TaskPath + $_.TaskName
+    $fullName -match [regex]::Escape($wtBin)    -or
+    $fullName -match [regex]::Escape($ldPy)     -or
+    $fullName -match [regex]::Escape($pcjsPkg)  -or
+    $fullName -match [regex]::Escape($c2Domain) -or
+    $fullName -match [regex]::Escape($actMond)
 }
 if ($suspiciousTasks) {
     foreach ($task in $suspiciousTasks) {
@@ -226,7 +228,6 @@ if ($suspiciousTasks) {
     Ok "No suspicious scheduled tasks found"
 }
 
-# Startup registry keys
 $regPaths = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
     "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -235,9 +236,9 @@ foreach ($regPath in $regPaths) {
     $runKeys = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
     if ($runKeys) {
         $runKeys.PSObject.Properties | Where-Object {
-            $_.Value -match ([regex]::Escape($ioc_wt_bin)) -or
-            $_.Value -match ([regex]::Escape($ioc_pcjs)) -or
-            $_.Value -match ([regex]::Escape($ioc_c2_domain))
+            $_.Value -match [regex]::Escape($wtBin)   -or
+            $_.Value -match [regex]::Escape($pcjsPkg) -or
+            $_.Value -match [regex]::Escape($c2Domain)
         } | ForEach-Object {
             Flag "Suspicious Run key: $($_.Name) = $($_.Value)"
         }
@@ -254,11 +255,15 @@ foreach ($lockfile in @("package-lock.json", "yarn.lock", "pnpm-lock.yaml")) {
     if (Test-Path $lockfile) {
         Info "Found $lockfile"
         $content = Get-Content $lockfile -Raw
-        if ($content -match ([regex]::Escape($ioc_ax_bad1)) -or $content -match ([regex]::Escape($ioc_ax_bad2))) {
+        $badAxios = $false
+        foreach ($badVer in $axBadVers) {
+            if ($content -match [regex]::Escape($badVer)) { $badAxios = $true }
+        }
+        if ($badAxios) {
             Flag "$lockfile references a malicious axios version"
         }
-        if ($content -match ([regex]::Escape($ioc_pcjs))) {
-            Flag "$lockfile references $ioc_pcjs"
+        if ($content -match [regex]::Escape($pcjsPkg)) {
+            Flag "$lockfile references $pcjsPkg"
         }
     }
 }
@@ -291,10 +296,10 @@ if ($FOUND) {
     Write-Host "  Immediate actions required:" -ForegroundColor Red
     Write-Host "  1. Rotate ALL credentials, API keys, SSH keys, tokens" -ForegroundColor Red
     Write-Host "  2. Delete malicious files listed above" -ForegroundColor Red
-    Write-Host "  3. npm uninstall axios $ioc_pcjs" -ForegroundColor Red
+    Write-Host "  3. npm uninstall axios $pcjsPkg" -ForegroundColor Red
     Write-Host "  4. npm install axios@1.8.4" -ForegroundColor Red
     Write-Host "  5. Review Windows Event Log for outbound network activity" -ForegroundColor Red
-    Write-Host "  6. Consider reimaging if $ioc_wt_bin payload was found" -ForegroundColor Red
+    Write-Host "  6. Consider reimaging if $wtBin payload was found" -ForegroundColor Red
 } else {
     Write-Host "  RESULT: No indicators of compromise found" -ForegroundColor Green
     Write-Host ""
@@ -305,3 +310,4 @@ if ($FOUND) {
 }
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
+Read-Host "Press Enter to close"
