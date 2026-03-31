@@ -62,23 +62,25 @@ The script fetches the latest IOC data from GitHub on startup. If offline, it fa
 
 ### Windows (PowerShell)
 
-Open a PowerShell terminal, `cd` to the folder containing the scripts, then run:
+Most checks (scheduled tasks, firewall logs, DNS cache, network connections, `HKLM` registry keys) require Administrator privileges. **Run as Administrator** is the recommended approach:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
-```
-
-For full results (scheduled tasks, firewall logs, `HKLM` registry keys), run from an **elevated (Administrator) PowerShell** prompt:
-
-1. Open **PowerShell as Administrator** (right-click → *Run as administrator*)
-2. `cd` to the folder containing the scripts
+1. Press **Win**, type `PowerShell`, right-click **Windows PowerShell** → **Run as administrator**
+2. In the elevated window, `cd` to the folder containing the scripts:
+   ```powershell
+   cd "C:\path\to\axios-scanner"
+   ```
 3. Run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
+   ```
+
+> **Note:** Do not use `Start-Process powershell -Verb RunAs` — the elevated window opens in `C:\Windows\System32` and closes immediately before you can read the output. Open an elevated terminal manually instead.
+
+If you only want to run the npm/package checks without admin (limited results):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\check-axios-rat.ps1"
 ```
-
-> **Note:** Using `Start-Process powershell -Verb RunAs` to self-elevate causes the new window to open in `C:\Windows\System32` and close immediately on exit — run from an already-elevated terminal instead.
 
 ---
 
