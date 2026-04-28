@@ -352,12 +352,27 @@ foreach ($lockfile in @("package-lock.json", "yarn.lock", "pnpm-lock.yaml")) {
         Info "Found $lockfile"
         try {
             $content = Get-Content $lockfile -Raw
-            $badAxios = $false
+            $foundBadVer = $null
             foreach ($badVer in $axBadVers) {
-                if ($content -match [regex]::Escape($badVer)) { $badAxios = $true }
+                $escVer = [regex]::Escape($badVer)
+                # Match axios-tied version references only:
+                #   axios-1.14.1.tgz   (npm/yarn resolved tarball URL)
+                #   axios@1.14.1       (pnpm-lock.yaml v9 keys, yarn.lock keys)
+                #   /axios/1.14.1      (older pnpm-lock.yaml keys)
+                # The boundaries prevent matches like dashdash-1.14.1 or axios-1.14.10.
+                if ($content -match "(?<![A-Za-z0-9])axios[-@/]$escVer(?!\d)") {
+                    $foundBadVer = $badVer
+                    break
+                }
+                # Fallback: JSON object keyed on axios with "version": "<bad>"
+                # Covers legacy package-lock.json entries without resolved URLs.
+                if ($content -match "(?ms)`"(?:[^`"]*/)?axios`"\s*:\s*\{[^{}]*?`"version`"\s*:\s*`"$escVer`"") {
+                    $foundBadVer = $badVer
+                    break
+                }
             }
-            if ($badAxios) {
-                Flag "$lockfile references a malicious axios version"
+            if ($foundBadVer) {
+                Flag "$lockfile references malicious axios@$foundBadVer"
             }
             if ($content -match [regex]::Escape($pcjsPkg)) {
                 Flag "$lockfile references $pcjsPkg"

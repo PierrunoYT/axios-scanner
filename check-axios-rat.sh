@@ -336,15 +336,56 @@ echo -e "${BLD}7. Scanning lock files in current directory...${RST}"
 for lockfile in package-lock.json yarn.lock pnpm-lock.yaml; do
   if [[ -f "$lockfile" ]]; then
     info "Found $lockfile"
-    is_bad=0
+    found_bad_ver=""
     for bad_ver in "${AX_BAD[@]}"; do
-      if grep -qF "$bad_ver" "$lockfile" 2>/dev/null; then
-        is_bad=1
+      esc_ver="${bad_ver//./\\.}"
+      # Match axios-tied version references only:
+      #   axios-1.14.1.tgz   (npm/yarn resolved tarball URL)
+      #   axios@1.14.1       (pnpm-lock.yaml v9 keys, yarn.lock keys)
+      #   /axios/1.14.1      (older pnpm-lock.yaml keys)
+      # The boundaries prevent matches like dashdash-1.14.1 or axios-1.14.10.
+      if grep -qE "(^|[^A-Za-z0-9])axios[-@/]${esc_ver}([^0-9]|$)" "$lockfile" 2>/dev/null; then
+        found_bad_ver="$bad_ver"
+        break
+      fi
+      # Fallback: JSON object keyed on axios with "version": "<bad>".
+      # awk walks the file tracking brace depth so we only match
+      # the version field that belongs to an "axios" or ".../axios" entry.
+      if awk -v bv="$bad_ver" '
+        BEGIN { found = 0; inblk = 0; depth = 0 }
+        {
+          line = $0
+          while (length(line) > 0) {
+            if (inblk == 0) {
+              if (match(line, /"([^"]*\/)?axios"[[:space:]]*:[[:space:]]*\{/)) {
+                inblk = 1; depth = 1
+                line = substr(line, RSTART + RLENGTH)
+                continue
+              }
+              break
+            } else {
+              pat = "\"version\"[[:space:]]*:[[:space:]]*\"" bv "\""
+              if (match(line, pat)) { found = 1 }
+              ob = index(line, "{"); cb = index(line, "}")
+              if (ob > 0 && (cb == 0 || ob < cb)) {
+                depth++; line = substr(line, ob + 1)
+              } else if (cb > 0) {
+                depth--; line = substr(line, cb + 1)
+                if (depth == 0) { inblk = 0 }
+              } else {
+                break
+              }
+            }
+          }
+        }
+        END { exit (found ? 0 : 1) }
+      ' "$lockfile" 2>/dev/null; then
+        found_bad_ver="$bad_ver"
         break
       fi
     done
-    if [[ "$is_bad" -eq 1 ]]; then
-      flag "$lockfile references a malicious axios version"
+    if [[ -n "$found_bad_ver" ]]; then
+      flag "$lockfile references malicious axios@$found_bad_ver"
     fi
     if grep -qF "$PCJS_PKG" "$lockfile" 2>/dev/null; then
       flag "$lockfile references $PCJS_PKG"
